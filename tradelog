@@ -1,0 +1,322 @@
+#!/usr/bin/bash
+
+export POSIXLY_CORRECT=yes
+export LC_NUMERIC=en_US.UTF-8
+
+
+#########################################
+## author:  Natalia Bubakova
+## login:   xbubak01
+## subject: IOS - 1.project
+## date:    6.4.2021
+#########################################
+
+
+############## functions ################
+
+help() {
+  echo -e "Usage: tradelog [-h|--help]
+       tradelog [FILTER]... [COMMAND]... [LOG]...
+
+Primarly LOG input supported: *.log, *.log.gz, stdin
+One COMMAND option will be executed, but multiple uses are also supported. Not required.
+Principal function is to filter and print log data. Combination of FILTER options allowed.
+
+Filter options:
+
+  -a =DATETIME    process only logs after DATETIME set by format YYYY-MM-DD HH:MM:SS
+  -b =DATETIME    process only logs before DATETIME set by format YYYY-MM-DD HH:MM:SS
+  -t =TICKER      consider only logs for TICKER set
+  -w =WIDTH       WIDTH defines the maximum width of ASCII graph for commands hist-ord and graph-pos, WIDTH is positive integer
+
+Command options:
+
+  list-tick     print list of tickers from considered data
+  profit        print total profit from considered transactions
+  pos           print value of currently held positions per ticker, descending sorted
+  last-price    print last price per ticker
+  hist-ord      display ASCII histogram for number of transactions per ticker
+  graph-pos     display ASCII graph for value of currently held positions per ticker; '#' for positive value, '!' for negative value
+
+The only format of logs supported:  YYYY-MM-DD HH:MM:SS;(TICKER);'buy'/'sell';(PRICE);(CURRENCY);(VOLUME);(ID)
+
+E-mail bug reports to: <xbubak01@vutbr.cz>."
+
+  exit 0
+}
+
+              ### filters ###
+
+tickers()
+{
+  SELECT=""
+  COLLECT=""
+  for i in "${TICK_ARR[@]}"
+  do
+    SELECT=" eval $DATA | awk -F ';' -v ticker='$i' '\$2==ticker {print \$0}'"
+
+    COLLECT="eval $SELECT | awk '{print}'; eval $COLLECT | awk '{print}'"
+  done
+
+  DATA="$COLLECT"
+}
+
+after()
+{
+  DATA=" eval $DATA | sort | awk -F ';' -v after_date='$A_DATE' '{if (\$1 > after_date) {print \$0}}' "
+}
+
+before()
+{
+  DATA=" eval $DATA | sort | awk -F ';' -v before_date='$B_DATE' '{if (\$1 < before_date) {print \$0}}' "
+}
+
+
+
+
+              ### commands ###
+list_tick()
+{
+  eval $DATA |awk -F ';' '{print $2}' | sort -u
+}
+
+profit()
+{
+  eval $DATA | awk -F ';' '{{if ($3=="sell") sell_value+=$4*$6}
+                            {if ($3=="buy") buy_value+=$4*$6}}
+                            END{profit=sell_value-buy_value;printf "%.2f\n", profit}'
+}
+
+last_price()
+{
+  eval $DATA | sort -r | awk -F ';' '{ {if (price[$2]==""){price[$2]=$4}}
+                           {if(length(price[$2])>longest){longest=length(price[$2])}} }
+                           END {for(i in price) printf "%-10s: %*.2f\n",i, longest, price[i]}' | sort
+}
+
+pos()
+{
+ eval $DATA | sort -r | awk -F ';' '{ { {if ($3=="buy"){tick[$2]+=$6}}
+                              {if ($3=="sell"){tick[$2]-=$6}} }
+                              {if (price[$2]==""){price[$2]=$4}} }
+                              END{
+                              {for(i in tick){string=sprintf("%.2f",tick[i]*price[i]);
+                              if (length(string)>longest) {longest=length(string)}
+                              }}
+                              {for(i in tick) printf "%-10s: %*.2f\n",i,longest,(tick[i]*price[i])}}' | sort -t':' -k2 -n -r
+}
+
+hist_ord()
+{
+  if [ -n "$WIDTH" ]
+  then
+
+  eval $DATA | awk -F ';' -v width_n="$WIDTH" '{trans_n[$2]+=1}
+                                                            END{{for(i in trans_n)
+                                                            { if(trans_n[i]>biggest_n){biggest_n=trans_n[i]}}}
+                                                            {per_hash=biggest_n/width_n}
+                                                            {for(i in trans_n)
+                                                            {printf "%-10s:",i;
+                                                            {for(j=0;j<(int(trans_n[i]/per_hash));j++){{if(j==0)printf" "};printf"#"}};
+                                                             printf"\n"} }}' | sort
+
+
+
+  else
+    eval $DATA | awk -F ';'  '{trans_n[$2]+=1}
+                              END{{for(i in trans_n)
+                                  {printf "%-10s:",i;
+                                  {for(j=0;j<(trans_n[i]);j++){{if(j==0)printf" "};printf"#"}};
+                                   printf"\n"} }}'|sort
+  fi
+}
+
+
+graph_pos()
+{
+  if [ -n "$WIDTH" ]
+  then
+    eval $DATA | sort -r | awk -F ';' -v width_n="$WIDTH" '{ { {if ($3=="buy"){tick[$2]+=$6}}
+                                                    {if ($3=="sell"){tick[$2]-=$6}} }
+                                                    {if (price[$2]==""){price[$2]=$4}} }
+                                                    END{
+                                                    {for(t in tick){temp=int(tick[t]*price[t]);
+                                                    {if (temp < 0) {temp=temp*(-1)}};
+                                                    {if(temp>biggest_n)biggest_n=temp}};
+                                                    per_symb=biggest_n/width_n}
+                                                    {for(i in tick){
+                                                      temp=int((tick[i]*price[i])/per_symb);
+                                                      printf "%-10s:",i;
+                                                      {if (temp>=0){for(j=0;j<temp;j++){{if (j==0)printf" "};printf"#"}}};
+                                                      {if (temp<0){for(j=0;j<((-1)*temp);j++){{if (j==0)printf" "};printf"!"}}};
+                                                      printf"\n"}} }' | sort
+  else
+    eval $DATA | sort -r | awk -F ';' '{ { {if ($3=="buy"){tick[$2]+=$6}}
+                              {if ($3=="sell"){tick[$2]-=$6}} }
+                              {if (price[$2]==""){price[$2]=$4}} }
+                              END{
+                              {for(i in tick){
+                                temp=int((tick[i]*price[i])/1000);
+                                printf "%-10s:",i;
+                                {if (temp>=0){for(j=0;j<temp;j++){{if (j==0)printf" "};printf"#"}}};
+                                {if (temp<0){for(j=0;j<((-1)*temp);j++){{if (j==0)printf" "};printf"!"}}};
+                                printf"\n"}} }'| sort
+  fi
+}
+
+
+################ variables ################
+
+LOGS=""
+DATA=""
+GZIP=""
+COMMANDS=()
+TICK_ARR=() # array for list-tick
+A_DATE=""
+B_DATE=""
+WIDTH=""
+
+
+################# main #################
+
+      ### checks arguments ##
+while [ "$#" -gt 0 ]; do
+  case $1 in
+  "-h" | "--help")    ## print 'help' and end up
+    help
+    ;;
+  "-t")               ## checks filters
+    TICK_ARR+=($2)
+    shift
+    shift
+    ;;
+  "-a"|"-b")
+    CHECK_DATE="echo "$2" | grep -x \"[[:digit:]]\{4\}-[[:digit:]]\{2\}-[[:digit:]]\{2\} [[:digit:]]\{2\}:[[:digit:]]\{2\}:[[:digit:]]\{2\}\" >/dev/null"
+    if ( eval $CHECK_DATE )
+    then
+      if [ "$1" == "-a" ]
+      then
+        A_DATE="$2"
+      else
+        B_DATE="$2"
+      fi
+    else
+      echo "Date parameter is not valid" 1>&2
+      exit 1
+    fi
+    shift
+    shift
+    ;;
+  "-w")
+    if [ -z "$WIDTH" ] && [ $2 -gt 0 ]
+    then
+      WIDTH=$2
+    else
+      echo "Width parameter is not valid" 1>&2
+      exit 1
+    fi
+    shift
+    shift
+    ;;                ## checks commands
+  "list-tick" | "profit" | "pos" | "last-price" | "hist-ord" | "graph-pos")
+    COMMANDS+=($1)
+    shift
+    ;;
+  *.log)
+    if [ -f $1 ]; then
+      LOGS="$1 $LOGS"
+      shift
+    else
+      echo "The log file '$1' doesn't exist" 1>&2
+      exit 1
+    fi
+    ;;
+  *.gz)
+    if [ -f $1 ]; then
+      GZIP="$1"
+      shift
+    else
+      echo "The GZIP file '$1' doesn't exist" 1>&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Argument undefined" 1>&2
+    exit 1
+    #shift
+    ;;
+  esac
+done
+
+
+   ### collect data to process ###
+
+if [ -n "$GZIP" ] && [ -n "$LOGS" ]
+  then
+    DATA="gzip -d -c $GZIP | cat $LOGS -"
+elif [ -n "$GZIP" ]
+  then
+    DATA="gzip -d -c $GZIP"
+elif [ -n "$LOGS" ]
+  then
+    DATA="cat $LOGS"
+else
+    DATA="cat -"
+fi
+
+
+      ### apply filters ###
+
+if [ ${#TICK_ARR[@]} -ne 0 ]     #if it is not empty
+then
+    tickers
+fi
+
+if [ ! -z "$A_DATE" ]
+then
+    after
+fi
+
+if [ ! -z "$B_DATE" ]
+then
+    before
+fi
+
+
+     ### apply commands ###
+
+for c in "${COMMANDS[@]}"; do
+  case $c in
+  "list-tick")
+    list_tick
+    ;;
+  "profit")
+    profit
+    ;;
+  "pos")
+    pos
+    ;;
+  "last-price")
+    last_price
+    ;;
+  "hist-ord")
+    hist_ord
+    ;;
+  "graph-pos")
+    graph_pos
+    ;;
+  esac
+done
+
+
+  ### when no command, print filtered data ###
+
+if [ ${#COMMANDS[@]} -eq 0 ]
+then
+  if [ ${#TICK_ARR[@]} -ne 0 ] #ticker filter wasn't sorted before
+  then
+       eval $DATA|sort
+  else
+      eval $DATA
+  fi
+fi
