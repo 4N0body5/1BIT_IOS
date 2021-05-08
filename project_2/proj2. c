@@ -5,6 +5,7 @@
  *  date:     2.5.2021          *
  ********************************/
 
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -311,7 +312,6 @@ int clean()
 
   return 0;
 }
-
 
 
 
