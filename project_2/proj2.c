@@ -1,0 +1,367 @@
+/********************************
+ *  author:   Natalia Bubakova  *
+ *  login:    xbubak01          *
+ *  subject:  IOS - 2. project  *
+ *  date:     2.5.2021          *
+ ********************************/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <semaphore.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include <time.h>
+#include <stdbool.h>
+
+
+
+
+sem_t *sem_counter;   //semaphore so the prints go in order one after another
+sem_t *sem_santa;     //semaphore for Santa to wake up
+sem_t *sem_santa2;    //semaphore for Santa to let elves/reindeers finish when helping/hitching them
+sem_t *sem_elf;       //semaphore for elves almost in workshop to wait until they are three
+sem_t *sem_elf2;      //semaphore for elves to wait until they get help from Santa
+sem_t *sem_reindeer;  //semaphore for reindeers to wait until the last comes and Santa hitches them
+
+FILE *file;
+
+int *counter;         //index for prints
+int *three_elves;     //counts elves until they are three
+int *num_reindeer;    //counts reindeers
+int *NR;              //number of reindeers (has to be shared)
+
+bool *closed_workshop;//bool to report when workshop is closed
+
+
+
+
+int check_arguments(char arg1[],char arg2[],char arg3[],char arg4[])
+{
+  file = fopen("proj2.out", "w");
+  setbuf(file,NULL);
+  if(file == NULL)
+  {
+      printf("Opening the file failed!");
+      exit(1);
+  }
+
+
+  if (atoi(arg1) <= 0 || atoi(arg1) >= 1000)     // 0 < NE < 1000
+    return -1;
+
+  else if (atoi(arg2) <= 0 || atoi(arg2) >= 20)   // 0 < NR < 20
+    return -1;
+
+  else if (atoi(arg3) < 0 || atoi(arg3) > 1000)  // 0 <= TE <= 1000
+    return -1;
+
+  else if (atoi(arg4) < 0 || atoi(arg4) > 1000)  // 0 <= TR <= 1000
+      return -1;
+
+  return 0;
+}
+
+
+
+int init()
+{
+  sem_counter = mmap (NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+  if ( sem_counter == MAP_FAILED )
+    return -1;
+
+  sem_santa = mmap (NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+  if ( sem_santa == MAP_FAILED )
+    return -1;
+
+  sem_santa2 = mmap (NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+  if ( sem_santa2 == MAP_FAILED )
+    return -1;
+
+  sem_elf = mmap (NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+  if ( sem_elf == MAP_FAILED )
+    return -1;
+
+  sem_elf2 = mmap (NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+  if ( sem_elf2 == MAP_FAILED )
+    return -1;
+
+  sem_reindeer = mmap (NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+  if ( sem_reindeer == MAP_FAILED )
+    return -1;
+
+  if ( sem_init(sem_counter, 1, 1) == -1 )
+    return -1;
+
+  if ( sem_init(sem_santa, 1, 0) == -1 )
+    return -1;
+
+  if ( sem_init(sem_santa2, 1, 0) == -1 )
+    return -1;
+
+  if ( sem_init(sem_elf, 1, 1) == -1 )
+    return -1;
+
+  if ( sem_init(sem_elf2, 1, 0) == -1 )
+    return -1;
+
+  if ( sem_init(sem_reindeer, 1, 0) == -1 )
+    return -1;
+
+
+  counter = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+  if (counter == MAP_FAILED)
+    return -1;
+
+  three_elves = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+  if (three_elves == MAP_FAILED)
+    return -1;
+
+  num_reindeer = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+  if (num_reindeer == MAP_FAILED)
+    return -1;
+
+  closed_workshop = mmap(NULL, sizeof(bool), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+  if (closed_workshop == MAP_FAILED)
+    return -1;
+
+  NR = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+  if (NR == MAP_FAILED)
+    return -1;
+
+  (*counter) = 0;
+  (*three_elves) = 0;
+  (*num_reindeer) = 0;
+  (*closed_workshop) = false;
+
+  return 0;
+}
+
+
+void print(char *message,int id)
+{
+  sem_wait(sem_counter);
+  (*counter)++;
+
+    if (id == 0)                          // zero when Santa
+     fprintf(file, message, *counter);
+    else                                  //id when elves or reindeers
+     fprintf(file, message, *counter, id);
+
+  fflush(file);
+  sem_post(sem_counter);
+}
+
+
+void Santa_role()
+{
+  print("%d: Santa: going to sleep\n", 0);
+
+  while(true)
+  {
+    sem_wait(sem_santa);                //Santa waiting for being awaken (either be reindeer or elves)
+    if ((*num_reindeer) == (*NR) )      //last reindeer came
+    {
+      print("%d: Santa: closing workshop\n", 0);
+      (*closed_workshop) = true;
+      for (int i = 0; i < 3; i++)
+      {
+        sem_post(sem_elf2);     //so the elves almost in workshop may stop waiting and go for holidays
+      }
+      (*num_reindeer)=0;        //initializing for another counting
+      for (int i = 0; i < (*NR); i++)
+      {
+        sem_post(sem_reindeer);
+      }
+      sem_wait(sem_santa2);     //the last reindeer let him continue
+      print("%d: Santa: Christmas started\n", 0);
+      exit(0);
+    }
+    else if ((*three_elves) == 3)       //elves want help
+    {
+      print("%d: Santa: helping elves\n", 0);
+      for (int i = 0; i < 3; i++)
+      {
+        sem_post(sem_elf2);
+        sem_wait(sem_santa2);   //waits until elf finishes
+      }
+      print("%d: Santa: going to sleep\n", 0);
+      (*three_elves) = 0;       //initializing for another counting
+      sem_post(sem_elf);        //lets first elf to enter and group to three
+    }
+  }
+
+
+
+
+  exit(0);
+}
+
+
+
+
+void elf_role(int id, int max_time)
+{
+  bool closed = false;
+  print("%d: Elf %d: started\n", id);
+  while(true)
+  {
+    srand( getpid() + time(NULL) );
+    usleep( (rand() % (max_time +1)) * 1000 );  //work independently -> random btw <0,max_time> ms
+
+    print("%d: Elf %d: need help\n", id);
+    sem_wait(sem_elf);                  //first Santa can release it, then other elves to group to three
+    if (*closed_workshop)
+      closed = true;                    //workshop closed
+    else
+    {
+      (*three_elves)++;
+      if ((*three_elves) < 3)
+      {
+        sem_post(sem_elf);
+      }
+      else if ((*three_elves) == 3)
+      {
+        sem_post(sem_santa);
+      }
+
+      sem_wait(sem_elf2);               //only Santa can release it when gives a help
+      if (*closed_workshop)
+        closed = true;                  //still possibility that workshop is closed
+      else
+      {
+        print("%d: Elf %d: get help\n", id);
+        sem_post(sem_santa2);
+      }
+    }
+
+    if (closed)
+    {
+      sem_post(sem_elf);
+      print("%d: Elf %d: taking holidays\n", id);
+      exit(0);
+    }
+
+  }
+}
+
+
+
+
+void reindeer_role(int id, int max_time)
+{
+
+  print("%d: RD %d: rstarted\n", id);
+
+  srand( getpid() + time(NULL) );
+  usleep( (rand() % ((max_time/2) +1) + (max_time/2)) * 1000 );  //vacation -> random btw <max_time/2,max_time> ms
+
+
+  print("%d: RD %d: return home\n", id);
+  (*num_reindeer)++;
+  if ((*num_reindeer) == (*NR))
+  {
+    sem_post(sem_santa);        //last reindeers wakes up Santa
+  }
+  sem_wait(sem_reindeer);       //only Santa can release it when goes to hitch them
+
+  print("%d: RD %d: get hitched\n", id);
+
+  (*num_reindeer)++;
+  if ((*num_reindeer) == (*NR) )
+    sem_post(sem_santa2);      //after last reindeer got hitched, lets Santa to announce Christmas
+
+  exit(0);
+}
+
+
+
+
+int clean()
+{
+  fclose(file);
+
+  if (sem_destroy(sem_counter) == -1)
+    return -1;
+  if (sem_destroy(sem_santa) == -1)
+    return -1;
+  if (sem_destroy(sem_santa2) == -1)
+    return -1;
+  if (sem_destroy(sem_elf) == -1)
+    return -1;
+  if (sem_destroy(sem_elf2) == -1)
+    return -1;
+  if (sem_destroy(sem_reindeer) == -1)
+    return -1;
+
+  munmap(sem_counter, sizeof(sem_t));
+  munmap(sem_santa, sizeof(sem_t));
+  munmap(sem_santa2, sizeof(sem_t));
+  munmap(sem_elf, sizeof(sem_t));
+  munmap(sem_elf2, sizeof(sem_t));
+  munmap(sem_reindeer, sizeof(sem_t));
+
+  munmap(counter, sizeof(int));
+  munmap(three_elves, sizeof(int));
+  munmap(num_reindeer, sizeof(int));
+  munmap(NR, sizeof(int));
+
+  munmap(closed_workshop, sizeof(bool));
+
+  return 0;
+}
+
+
+
+
+
+
+int main(int argc, char *argv[])
+{
+    if ( (argc != 5) || (check_arguments(argv[1],argv[2],argv[3],argv[4]) == -1) )
+    {
+      fprintf( stderr, "Wrong arguments, only format allowed: './proj2 NE NR TE TR' with set restrictions\n" );
+      exit(1);
+    }
+
+    if(init() == -1)             //function initializing semaphores and shared variables
+    {
+      fprintf(stderr, "Mapping failed!\n");
+      exit(1);
+    }
+
+    int ne = atoi(argv[1]);      //number of elves
+    (*NR) = atoi(argv[2]);       //number of reindeers (shared variable)
+    int te = atoi(argv[3]);      //max-time for elves to work independent
+    int tr = atoi(argv[4]);      //max-time for reindeers to be on vacation
+
+
+
+    if(fork() == 0)                 //child process after fork() becomes Santa and does its role
+      Santa_role();
+
+    for(int i = 1; i <= ne; i++)    // NE-times to make given number of elf-processes
+    {
+      if(fork() == 0)               //child process after fork() becomes elf and does its role
+        elf_role(i, te);
+    }
+
+    for(int i = 1; i <= (*NR); i++) // NR-times to make given number of reindeer-processes
+    {
+      if(fork() == 0)               //child process after fork() becomes reindeer and does its role
+        reindeer_role(i, tr);
+    }
+
+
+
+    while(wait(NULL) != -1 || errno != ECHILD) ; //waits until there are no child processes to wait for
+
+    if( clean() == -1)              // function cleaning semaphores and shared variables
+    {
+      fprintf(stderr, "Destroying semaphores failed\n");
+      exit(1);
+    }
+
+    return 0;
+}
