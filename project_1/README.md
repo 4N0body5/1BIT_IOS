@@ -37,3 +37,9 @@ _FILTR_ může být kombinace následujících:
 **FORMÁT LOGU**
 
 `DATUM A CAS;TICKER;TYP TRANSAKCE;JEDNOTKOVA CENA;MENA;OBJEM;ID`
+
+
+
+_______________________________________
+
+Hodnotenie .................... _15/15_
